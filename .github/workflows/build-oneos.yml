@@ -1,0 +1,58 @@
+name: Build OneOS ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (without leading v)"
+        required: false
+        default: "1.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Free Runner Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Build OneOS Arch ISO
+        env:
+          ONEOS_VERSION: ${{ github.event.inputs.version || '1.0.0' }}
+        run: |
+          chmod +x scripts/*.sh
+          docker run --rm --privileged \
+            -e ONEOS_VERSION \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            archlinux:latest \
+            /bin/bash /workspace/scripts/build-iso.sh
+
+      - name: Generate Checksums
+        run: |
+          cd "${GITHUB_WORKSPACE}/out"
+          ISO_FILE=$(ls OneOS-*.iso | head -n 1)
+          sha256sum "${ISO_FILE}" > "${ISO_FILE}.sha256"
+          ls -lh "${ISO_FILE}"*
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version || '1.0.0' }}
+          name: OneOS v${{ github.event.inputs.version || '1.0.0' }}
+          body: |
+            ### ✦ OneOS v${{ github.event.inputs.version || '1.0.0' }}
+            - **Desktop:** KDE Plasma 6 (X11) with One UI dark theme & floating bottom dock
+            - **AI:** Built-in Gemini corner pill with Circle to Search (`◎`)
+            - **Boot & Install:** Plymouth silent boot + 4-dot morphing splash + zero-password Calamares installer
+          files: out/OneOS-*.iso*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
