@@ -41,7 +41,7 @@ SigLevel = Optional TrustAll
 Server = file:///build/local-repo
 LOCAL_REPO_EOF
 
-# 3. ISO Metadata (keeping proven default SquashFS settings so live boot finds airootfs.sfs)
+# 3. ISO Metadata (preserving default releng SquashFS settings so live boot finds airootfs.sfs)
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i "s/^iso_version=.*/iso_version=\"v${ONEOS_VERSION}\"/" "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
@@ -109,7 +109,6 @@ mkdir -p \
   "${AIROOTFS}/etc/calamares/modules" \
   "${AIROOTFS}/etc/sudoers.d" \
   "${AIROOTFS}/etc/plymouth" \
-  "${AIROOTFS}/etc/mkinitcpio.conf.d" \
   "${AIROOTFS}/usr/local/bin"
 
 # 5. Copy Modular Apps & Configs from Repo
@@ -126,10 +125,9 @@ cp -f "${REPO_DIR}/configs/calamares/bootloader.conf" "${AIROOTFS}/etc/calamares
 cp -f "${REPO_DIR}/scripts/customize-rootfs.sh" "${AIROOTFS}/root/customize_airootfs.sh"
 chmod 0755 "${AIROOTFS}/root/customize_airootfs.sh"
 
-# 6. Enable Plymouth Hook in mkinitcpio & Silent Kernel Boot Flags
-cat <<'MKINIT_EOF' > "${AIROOTFS}/etc/mkinitcpio.conf.d/oneos-plymouth.conf"
-HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)
-MKINIT_EOF
+# 6. Insert Plymouth into ArchISO's existing mkinitcpio HOOKS (keeping archiso live-boot hooks intact!)
+sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf.d/archiso.conf" 2>/dev/null || \
+  sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
 
 sed -i 's/quiet/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0/g' \
   "${PROFILE_DIR}/efiboot/loader/entries/"*.conf \
