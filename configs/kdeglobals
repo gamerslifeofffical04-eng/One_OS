@@ -1,0 +1,14 @@
+[General]
+ColorScheme=BreezeDark
+Name=Breeze Dark
+AccentColor=88,130,255
+widgetStyle=kvantum-dark
+font=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+
+[Icons]
+Theme=Papirus-Dark
+
+[KDE]
+AnimationDurationFactor=0.5
+LookAndFeelPackage=org.kde.breezedark.desktop
+SingleClick=false
