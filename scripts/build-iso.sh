@@ -9,11 +9,32 @@ OUT_DIR="${REPO_DIR}/out"
 
 pacman-key --init
 pacman-key --populate archlinux
+
+# Add Chaotic-AUR so Calamares installs cleanly via pacman
+pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
+pacman-key --lsign-key 3056513887B78AEB
+pacman -U --noconfirm \
+  'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' \
+  'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
+
+cat <<'CHAOTIC_EOF' >> /etc/pacman.conf
+
+[chaotic-aur]
+Include = /etc/pacman.d/chaotic-mirrorlist
+CHAOTIC_EOF
+
 pacman -Syu --noconfirm archiso git base-devel
 
-rm -rf "${PROFILE_DIR}" "${WORK_DIR}" "${OUT_DIR}"
-mkdir -p "${OUT_DIR}"
+rm -rf /build "${OUT_DIR}"
+mkdir -p /build "${OUT_DIR}"
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
+
+# Enable Chaotic-AUR inside the ISO's pacman.conf as well
+cat <<'ISO_CHAOTIC_EOF' >> "${PROFILE_DIR}/pacman.conf"
+
+[chaotic-aur]
+Include = /etc/pacman.d/chaotic-mirrorlist
+ISO_CHAOTIC_EOF
 
 # 1. ISO Metadata
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
@@ -59,6 +80,8 @@ zram-generator
 pipewire
 pipewire-pulse
 wireplumber
+chaotic-keyring
+chaotic-mirrorlist
 calamares
 squashfs-tools
 rsync
