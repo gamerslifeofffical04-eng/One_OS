@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-REPO = "vga4400x4400-blip/OneOS"
+REPO = "gamerslifeofffical04-eng/One_OS"
 RELEASE_FILE = Path("/etc/oneos-release")
 
 
