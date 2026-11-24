@@ -12,13 +12,18 @@ pacman-key --init
 pacman-key --populate archlinux
 pacman -Syu --noconfirm archiso git base-devel
 
+# Utilize all available CPU cores (4 vCPUs on public repo) for C++ compilation
+export MAKEFLAGS="-j$(nproc)"
+sed -i "s/^#MAKEFLAGS=.*/MAKEFLAGS=\"-j$(nproc)\"/" /etc/makepkg.conf
+
 rm -rf /build "${OUT_DIR}"
 mkdir -p /build "${LOCAL_REPO}" "${OUT_DIR}"
 
-# 1. Build Calamares from AUR into a local pacman repository
+# 1. Build Calamares from AUR into a local pacman repository using all 4 cores
 useradd -m -s /bin/bash builder
 echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 su - builder -c '
+  export MAKEFLAGS="-j$(nproc)"
   git clone https://aur.archlinux.org/calamares.git /tmp/calamares
   cd /tmp/calamares
   makepkg -si --noconfirm
@@ -36,7 +41,7 @@ SigLevel = Optional TrustAll
 Server = file:///build/local-repo
 LOCAL_REPO_EOF
 
-# 3. ISO Metadata
+# 3. ISO Metadata (keeping proven default SquashFS settings so live boot finds airootfs.sfs)
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i "s/^iso_version=.*/iso_version=\"v${ONEOS_VERSION}\"/" "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
@@ -175,5 +180,6 @@ NoDisplay=true
 X-KDE-autostart-after=panel
 PILL_DESK
 
-# 8. Build ISO
+# 8. Build ISO (mksquashfs automatically uses all 4 cores) & Fix Host Output Permissions
 mkarchiso -v -w "${WORK_DIR}" -o "${OUT_DIR}" "${PROFILE_DIR}"
+chmod -R 777 "${OUT_DIR}"
