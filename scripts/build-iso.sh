@@ -117,7 +117,7 @@ PRETTY_NAME="OneOS"
 ID=oneos
 ID_LIKE=arch
 BUILD_ID=rolling
-HOME_URL="https://github.com/vga4400x4400-blip/OneOS"
+HOME_URL="https://github.com/gamerslifeofffical04-eng/One_OS"
 LOGO=start-here-kde
 OS_REL_EOF
 echo "ONEOS_VERSION=${ONEOS_VERSION}" > "${AIROOTFS}/etc/oneos-release"
