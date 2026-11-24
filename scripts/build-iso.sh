@@ -5,51 +5,50 @@ ONEOS_VERSION="${ONEOS_VERSION:-1.0.0}"
 REPO_DIR="/workspace"
 PROFILE_DIR="/build/oneos-profile"
 WORK_DIR="/build/work"
+LOCAL_REPO="/build/local-repo"
 OUT_DIR="${REPO_DIR}/out"
 
 pacman-key --init
 pacman-key --populate archlinux
-
-# Add Chaotic-AUR so Calamares installs cleanly via pacman
-pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
-pacman-key --lsign-key 3056513887B78AEB
-pacman -U --noconfirm \
-  'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' \
-  'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
-
-cat <<'CHAOTIC_EOF' >> /etc/pacman.conf
-
-[chaotic-aur]
-Include = /etc/pacman.d/chaotic-mirrorlist
-CHAOTIC_EOF
-
 pacman -Syu --noconfirm archiso git base-devel
 
 rm -rf /build "${OUT_DIR}"
-mkdir -p /build "${OUT_DIR}"
+mkdir -p /build "${LOCAL_REPO}" "${OUT_DIR}"
+
+# 1. Build Calamares from AUR into a local pacman repository
+useradd -m -s /bin/bash builder
+echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+su - builder -c '
+  git clone https://aur.archlinux.org/calamares.git /tmp/calamares
+  cd /tmp/calamares
+  makepkg -si --noconfirm
+'
+cp -f /tmp/calamares/*.pkg.tar.* "${LOCAL_REPO}/"
+repo-add "${LOCAL_REPO}/oneos-local.db.tar.gz" "${LOCAL_REPO}"/*.pkg.tar.*
+
+# 2. Setup ArchISO Profile
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
 
-# Enable Chaotic-AUR inside the ISO's pacman.conf as well
-cat <<'ISO_CHAOTIC_EOF' >> "${PROFILE_DIR}/pacman.conf"
+cat <<'LOCAL_REPO_EOF' >> "${PROFILE_DIR}/pacman.conf"
 
-[chaotic-aur]
-Include = /etc/pacman.d/chaotic-mirrorlist
-ISO_CHAOTIC_EOF
+[oneos-local]
+SigLevel = Optional TrustAll
+Server = file:///build/local-repo
+LOCAL_REPO_EOF
 
-# 1. ISO Metadata
+# 3. ISO Metadata
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i "s/^iso_version=.*/iso_version=\"v${ONEOS_VERSION}\"/" "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_publisher=.*/iso_publisher="OneOS Project"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_application=.*/iso_application="OneOS Live\/Install Media"/' "${PROFILE_DIR}/profiledef.sh"
 
-# 2. Packages (Plasma 6 X11, Plymouth, Kvantum, Calamares, PyQt6 WebEngine)
+# 4. Packages (Plasma 6, Plymouth, Kvantum, Calamares, PyQt6 WebEngine)
 cat <<'PKGS_EOF' >> "${PROFILE_DIR}/packages.x86_64"
 xorg-server
 xorg-xinit
 plasma-desktop
 plasma-workspace
-plasma-x11-session
 kwin
 sddm
 breeze
@@ -69,7 +68,7 @@ kscreen
 discover
 flatpak
 papirus-icon-theme
-ttf-inter
+inter-font
 noto-fonts
 noto-fonts-emoji
 plymouth
@@ -80,8 +79,6 @@ zram-generator
 pipewire
 pipewire-pulse
 wireplumber
-chaotic-keyring
-chaotic-mirrorlist
 calamares
 squashfs-tools
 rsync
@@ -110,7 +107,7 @@ mkdir -p \
   "${AIROOTFS}/etc/mkinitcpio.conf.d" \
   "${AIROOTFS}/usr/local/bin"
 
-# 3. Copy Modular Apps & Configs from Repo
+# 5. Copy Modular Apps & Configs from Repo
 cp -f "${REPO_DIR}/apps/oneos-gemini-pill.py" "${AIROOTFS}/usr/local/bin/oneos-gemini-assistant.py"
 cp -f "${REPO_DIR}/apps/oneos-boot-splash.py" "${AIROOTFS}/usr/local/bin/oneos-boot-splash"
 cp -f "${REPO_DIR}/apps/oneos-ota-updater.py" "${AIROOTFS}/usr/local/bin/oneos-ota-updater"
@@ -124,7 +121,7 @@ cp -f "${REPO_DIR}/configs/calamares/bootloader.conf" "${AIROOTFS}/etc/calamares
 cp -f "${REPO_DIR}/scripts/customize-rootfs.sh" "${AIROOTFS}/root/customize_airootfs.sh"
 chmod 0755 "${AIROOTFS}/root/customize_airootfs.sh"
 
-# 4. Enable Plymouth Hook in mkinitcpio & Silent Kernel Boot Flags
+# 6. Enable Plymouth Hook in mkinitcpio & Silent Kernel Boot Flags
 cat <<'MKINIT_EOF' > "${AIROOTFS}/etc/mkinitcpio.conf.d/oneos-plymouth.conf"
 HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)
 MKINIT_EOF
@@ -133,7 +130,7 @@ sed -i 's/quiet/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_def
   "${PROFILE_DIR}/efiboot/loader/entries/"*.conf \
   "${PROFILE_DIR}/syslinux/"*.cfg 2>/dev/null || true
 
-# 5. OS Identity & Autostart Entries
+# 7. OS Identity & Autostart Entries
 cat <<'OS_REL_EOF' > "${AIROOTFS}/etc/os-release"
 NAME="OneOS"
 PRETTY_NAME="OneOS"
@@ -146,12 +143,9 @@ OS_REL_EOF
 echo "ONEOS_VERSION=${ONEOS_VERSION}" > "${AIROOTFS}/etc/oneos-release"
 
 cat <<'SDDM_EOF' > "${AIROOTFS}/etc/sddm.conf.d/10-oneos.conf"
-[General]
-DisplayServer=x11
-
 [Autologin]
 User=oneos
-Session=plasmax11.desktop
+Session=plasma.desktop
 Relogin=false
 
 [Theme]
@@ -181,5 +175,5 @@ NoDisplay=true
 X-KDE-autostart-after=panel
 PILL_DESK
 
-# 6. Build ISO
+# 8. Build ISO
 mkarchiso -v -w "${WORK_DIR}" -o "${OUT_DIR}" "${PROFILE_DIR}"
