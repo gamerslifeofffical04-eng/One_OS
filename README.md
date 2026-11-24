@@ -4,8 +4,8 @@
 
 **An Android One UI-inspired desktop operating system built for speed, simplicity, and native AI.**
 
-[![Build OneOS ISO](https://github.com/vga4400x4400-blip/OneOS/actions/workflows/build-oneos.yml/badge.svg)](https://github.com/vga4400x4400-blip/OneOS/actions/workflows/build-oneos.yml)
-[![Latest Release](https://img.shields.io/github/v/release/vga4400x4400-blip/OneOS?color=5882ff&label=Download%20ISO)](https://github.com/vga4400x4400-blip/OneOS/releases/latest)
+[![Build OneOS ISO](https://github.com/gamerslifeofffical04-eng/One_OS/actions/workflows/build-oneos.yml/badge.svg)](https://github.com/gamerslifeofffical04-eng/One_OS/actions/workflows/build-oneos.yml)
+[![Latest Release](https://img.shields.io/github/v/release/gamerslifeofffical04-eng/One_OS?color=5882ff&label=Download%20ISO)](https://github.com/gamerslifeofffical04-eng/One_OS/releases/latest)
 [![Base](https://img.shields.io/badge/Base-Arch%20Linux-1793d1)](https://archlinux.org)
 [![Desktop](https://img.shields.io/badge/Desktop-KDE%20Plasma%206-1d99f3)](https://kde.org)
 
@@ -37,6 +37,6 @@
 
 ### 🚀 Quick Start
 
-1. Download the latest **`OneOS-x86_64.iso`** from the [**Releases**](https://github.com/vga4400x4400-blip/OneOS/releases/latest) page.
+1. Download the latest **`OneOS-v1.0.0-x86_64.iso`** from the [**Releases**](https://github.com/gamerslifeofffical04-eng/One_OS/releases/latest) page.
 2. Flash it to a USB drive using **Rufus**, **BalenaEtcher**, or **Ventoy**.
 3. Boot from USB—OneOS launches straight into the live desktop. Click **Install OneOS** on the desktop to install to your drive.
