@@ -5,50 +5,26 @@ ONEOS_VERSION="${ONEOS_VERSION:-1.0.0}"
 REPO_DIR="/workspace"
 PROFILE_DIR="/build/oneos-profile"
 WORK_DIR="/build/work"
-LOCAL_REPO="/build/local-repo"
 OUT_DIR="${REPO_DIR}/out"
 
 pacman-key --init
 pacman-key --populate archlinux
-pacman -Syu --noconfirm archiso git base-devel
-
-# Utilize all available CPU cores (4 vCPUs on public repo) for C++ compilation
-export MAKEFLAGS="-j$(nproc)"
-sed -i "s/^#MAKEFLAGS=.*/MAKEFLAGS=\"-j$(nproc)\"/" /etc/makepkg.conf
+pacman -Syu --noconfirm archiso git
 
 rm -rf /build "${OUT_DIR}"
-mkdir -p /build "${LOCAL_REPO}" "${OUT_DIR}"
+mkdir -p /build "${OUT_DIR}"
 
-# 1. Build Calamares from AUR into a local pacman repository using all 4 cores
-useradd -m -s /bin/bash builder
-echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-su - builder -c '
-  export MAKEFLAGS="-j$(nproc)"
-  git clone https://aur.archlinux.org/calamares.git /tmp/calamares
-  cd /tmp/calamares
-  makepkg -si --noconfirm
-'
-cp -f /tmp/calamares/*.pkg.tar.* "${LOCAL_REPO}/"
-repo-add "${LOCAL_REPO}/oneos-local.db.tar.gz" "${LOCAL_REPO}"/*.pkg.tar.*
-
-# 2. Setup ArchISO Profile
+# 1. Setup ArchISO Profile (No AUR / Calamares compilation needed)
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
 
-cat <<'LOCAL_REPO_EOF' >> "${PROFILE_DIR}/pacman.conf"
-
-[oneos-local]
-SigLevel = Optional TrustAll
-Server = file:///build/local-repo
-LOCAL_REPO_EOF
-
-# 3. ISO Metadata (preserving default releng SquashFS settings so live boot finds airootfs.sfs)
+# 2. ISO Metadata
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i "s/^iso_version=.*/iso_version=\"v${ONEOS_VERSION}\"/" "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_publisher=.*/iso_publisher="OneOS Project"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_application=.*/iso_application="OneOS Live\/Install Media"/' "${PROFILE_DIR}/profiledef.sh"
 
-# 4. Packages (Plasma 6, Plymouth, Kvantum, Calamares, PyQt6 WebEngine)
+# 3. Packages (Plasma 6, Plymouth, PyQt6 WebEngine, Parted & Arch Install Scripts)
 cat <<'PKGS_EOF' >> "${PROFILE_DIR}/packages.x86_64"
 xorg-server
 xorg-xinit
@@ -84,9 +60,10 @@ zram-generator
 pipewire
 pipewire-pulse
 wireplumber
-calamares
 squashfs-tools
 rsync
+parted
+arch-install-scripts
 grub
 efibootmgr
 os-prober
@@ -106,12 +83,13 @@ AIROOTFS="${PROFILE_DIR}/airootfs"
 mkdir -p \
   "${AIROOTFS}/etc/sddm.conf.d" \
   "${AIROOTFS}/etc/xdg/autostart" \
-  "${AIROOTFS}/etc/calamares/modules" \
   "${AIROOTFS}/etc/sudoers.d" \
   "${AIROOTFS}/etc/plymouth" \
-  "${AIROOTFS}/usr/local/bin"
+  "${AIROOTFS}/usr/local/bin" \
+  "${AIROOTFS}/usr/share/applications"
 
-# 5. Copy Modular Apps & Configs from Repo
+# 4. Copy OneOS Apps & Configs from Repo
+cp -f "${REPO_DIR}/apps/oneos-installer.py" "${AIROOTFS}/usr/local/bin/oneos-installer"
 cp -f "${REPO_DIR}/apps/oneos-gemini-pill.py" "${AIROOTFS}/usr/local/bin/oneos-gemini-assistant.py"
 cp -f "${REPO_DIR}/apps/oneos-boot-splash.py" "${AIROOTFS}/usr/local/bin/oneos-boot-splash"
 cp -f "${REPO_DIR}/apps/oneos-ota-updater.py" "${AIROOTFS}/usr/local/bin/oneos-ota-updater"
@@ -119,13 +97,10 @@ chmod 0755 "${AIROOTFS}/usr/local/bin/"oneos-*
 
 cp -f "${REPO_DIR}/configs/kdeglobals" "${AIROOTFS}/etc/xdg/kdeglobals"
 cp -f "${REPO_DIR}/configs/plymouthd.conf" "${AIROOTFS}/etc/plymouth/plymouthd.conf"
-cp -f "${REPO_DIR}/configs/calamares/settings.conf" "${AIROOTFS}/etc/calamares/settings.conf"
-cp -f "${REPO_DIR}/configs/calamares/unpackfs.conf" "${AIROOTFS}/etc/calamares/modules/unpackfs.conf"
-cp -f "${REPO_DIR}/configs/calamares/bootloader.conf" "${AIROOTFS}/etc/calamares/modules/bootloader.conf"
 cp -f "${REPO_DIR}/scripts/customize-rootfs.sh" "${AIROOTFS}/root/customize_airootfs.sh"
 chmod 0755 "${AIROOTFS}/root/customize_airootfs.sh"
 
-# 6. Insert Plymouth into ArchISO's existing mkinitcpio HOOKS (keeping archiso live-boot hooks intact!)
+# 5. Keep ArchISO Live Boot Hooks Intact & Add Plymouth
 sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf.d/archiso.conf" 2>/dev/null || \
   sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
 
@@ -133,7 +108,7 @@ sed -i 's/quiet/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_def
   "${PROFILE_DIR}/efiboot/loader/entries/"*.conf \
   "${PROFILE_DIR}/syslinux/"*.cfg 2>/dev/null || true
 
-# 7. OS Identity & Autostart Entries
+# 6. OS Identity, Zero-Password Sudo & Autostart Entries
 cat <<'OS_REL_EOF' > "${AIROOTFS}/etc/os-release"
 NAME="OneOS"
 PRETTY_NAME="OneOS"
@@ -158,15 +133,19 @@ SDDM_EOF
 echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" > "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
 chmod 0440 "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
 
-cat <<'SPLASH_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-boot-splash.desktop"
+cat <<'INSTALL_DESK' > "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
 [Desktop Entry]
 Type=Application
-Name=OneOS Boot Splash
-Exec=/usr/local/bin/oneos-boot-splash
+Name=Install OneOS
+Comment=Install OneOS to your hard drive
+Exec=/usr/local/bin/oneos-installer
+Icon=system-software-install
 Terminal=false
-NoDisplay=true
-X-KDE-autostart-phase=0
-SPLASH_DESK
+Categories=System;
+INSTALL_DESK
+
+# Auto-open Install OneOS on live boot (excluded from installed disk during rsync)
+cp -f "${AIROOTFS}/usr/share/applications/oneos-installer.desktop" "${AIROOTFS}/etc/xdg/autostart/oneos-installer.desktop"
 
 cat <<'PILL_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-gemini-pill.desktop"
 [Desktop Entry]
@@ -178,6 +157,6 @@ NoDisplay=true
 X-KDE-autostart-after=panel
 PILL_DESK
 
-# 8. Build ISO (mksquashfs automatically uses all 4 cores) & Fix Host Output Permissions
+# 7. Build ISO & Fix Host Output Permissions
 mkarchiso -v -w "${WORK_DIR}" -o "${OUT_DIR}" "${PROFILE_DIR}"
 chmod -R 777 "${OUT_DIR}"
