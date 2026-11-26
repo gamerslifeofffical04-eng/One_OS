@@ -17,6 +17,8 @@ mkdir -p /build "${OUT_DIR}"
 # 1. Setup ArchISO Profile & Enable [multilib] for Windows App Support
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
 
+sed -i '/^[options]/a Architecture = x86_64' "${PROFILE_DIR}/pacman.conf"
+
 cat <<'MULTILIB_EOF' >> "${PROFILE_DIR}/pacman.conf"
 
 [multilib]
@@ -123,6 +125,8 @@ cp -f "${REPO_DIR}/configs/kdeglobals" "${AIROOTFS}/etc/xdg/kdeglobals"
 cp -f "${REPO_DIR}/scripts/customize-rootfs.sh" "${AIROOTFS}/root/customize_airootfs.sh"
 chmod 0755 "${AIROOTFS}/root/customize_airootfs.sh"
 
+sed -i '/^[options]/a Architecture = x86_64' "${AIROOTFS}/etc/pacman.conf"
+
 cat <<'TARGET_MULTILIB' >> "${AIROOTFS}/etc/pacman.conf"
 
 [multilib]
@@ -143,126 +147,4 @@ ShowDelay=0
 DeviceTimeout=5
 PLY_CONF
 
-for entry in "${PROFILE_DIR}/efiboot/loader/entries/"*.conf "${PROFILE_DIR}/syslinux/"*.cfg; do
-  if [ -f "$entry" ]; then
-    sed -i 's/\bquiet\b/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0/g' "$entry"
-    grep -q "splash" "$entry" || sed -i '/^options / s/$/ quiet splash loglevel=3 vt.global_cursor_default=0/' "$entry"
-    grep -q "splash" "$entry" || sed -i '/^\s*APPEND / s/$/ quiet splash loglevel=3 vt.global_cursor_default=0/' "$entry"
-  fi
-done
-
-# 6. OS Identity, Zero-Password Sudo, No-Sleep Profile & Trusted Autostart Entries
-cat <<'OS_REL_EOF' > "${AIROOTFS}/etc/os-release"
-NAME="OneOS"
-PRETTY_NAME="OneOS"
-ID=oneos
-ID_LIKE=arch
-BUILD_ID=rolling
-HOME_URL="https://github.com/gamerslifeofffical04-eng/One_OS"
-LOGO=start-here-kde
-OS_REL_EOF
-echo "ONEOS_VERSION=${ONEOS_VERSION}" > "${AIROOTFS}/etc/oneos-release"
-
-cat <<'SDDM_EOF' > "${AIROOTFS}/etc/sddm.conf.d/10-oneos.conf"
-[Autologin]
-User=oneos
-Session=plasma.desktop
-Relogin=false
-
-[Theme]
-Current=breeze
-SDDM_EOF
-
-cat <<'SUDO_EOF' > "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
-Defaults env_keep += "DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS"
-%wheel ALL=(ALL:ALL) NOPASSWD: ALL
-SUDO_EOF
-chmod 0440 "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
-
-# Never Sleep / Never Lock Profile
-cat <<'SLEEP_CONF' > "${AIROOTFS}/etc/systemd/sleep.conf.d/10-nosleep.conf"
-[Sleep]
-AllowSuspend=no
-AllowHibernation=no
-AllowSuspendThenHibernate=no
-AllowHybridSleep=no
-SLEEP_CONF
-
-cat <<'POWER_RC' > "${AIROOTFS}/etc/skel/.config/powerdevilrc"
-[AC][Display]
-DimDisplayWhenIdle=false
-TurnOffDisplayWhenIdle=false
-
-[AC][SuspendAndShutdown]
-AutoSuspendAction=0
-POWER_RC
-
-cat <<'LOCK_RC' > "${AIROOTFS}/etc/skel/.config/kscreenlockerrc"
-[Daemon]
-Autolock=false
-LockOnResume=false
-LOCK_RC
-
-# Helper script that marks Desktop icons trusted in KDE Plasma 6
-cat <<'TRUST_SH' > "${AIROOTFS}/usr/local/bin/oneos-trust-desktop"
-#!/usr/bin/env bash
-sleep 2
-if [ -f "$HOME/Desktop/oneos-installer.desktop" ]; then
-  chmod +x "$HOME/Desktop/oneos-installer.desktop"
-  gio set "$HOME/Desktop/oneos-installer.desktop" metadata::trusted true 2>/dev/null || true
-fi
-TRUST_SH
-chmod 0755 "${AIROOTFS}/usr/local/bin/oneos-trust-desktop"
-
-cat <<'INSTALL_DESK' > "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
-[Desktop Entry]
-Type=Application
-Name=Install OneOS
-Comment=Install OneOS to your hard drive
-Exec=/usr/local/bin/oneos-installer
-Icon=system-software-install
-Terminal=false
-Categories=System;
-INSTALL_DESK
-chmod 0755 "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
-
-cp -f "${AIROOTFS}/usr/share/applications/oneos-installer.desktop" "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
-chmod 0755 "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
-
-# OneOS PyQt6 Boot/Welcome Splash
-cat <<'SPLASH_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-boot-splash.desktop"
-[Desktop Entry]
-Type=Application
-Name=OneOS Boot Splash
-Exec=/usr/local/bin/oneos-boot-splash
-Icon=start-here-kde
-Terminal=false
-NoDisplay=true
-X-KDE-autostart-phase=Initialization
-SPLASH_DESK
-
-# Auto-trust desktop shortcut + open OneOS Setup automatically on live boot
-cat <<'INSTALL_AUTO' > "${AIROOTFS}/etc/xdg/autostart/oneos-installer.desktop"
-[Desktop Entry]
-Type=Application
-Name=Install OneOS
-Exec=/bin/bash -c '/usr/local/bin/oneos-trust-desktop && sleep 1 && /usr/local/bin/oneos-installer'
-Icon=system-software-install
-Terminal=false
-X-KDE-autostart-phase=Application
-INSTALL_AUTO
-
-# Auto-launch Gemini Corner Pill on both Live and Installed systems
-cat <<'PILL_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-gemini-pill.desktop"
-[Desktop Entry]
-Type=Application
-Name=OneOS Gemini Corner Pill
-Exec=/bin/bash -c 'sleep 3 && /usr/local/bin/oneos-gemini-assistant.py'
-Terminal=false
-NoDisplay=true
-X-KDE-autostart-phase=Application
-PILL_DESK
-
-# 7. Build ISO & Fix Host Output Permissions
-mkarchiso -v -w "${WORK_DIR}" -o "${OUT_DIR}" "${PROFILE_DIR}"
-chmod -R 777 "${OUT_DIR}"
+for entry in "${PROFILE_DIR}/efiboot/loader/entries/"*.conf "${
