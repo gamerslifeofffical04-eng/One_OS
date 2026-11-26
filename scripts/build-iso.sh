@@ -14,8 +14,14 @@ pacman -Syu --noconfirm archiso git
 rm -rf /build "${OUT_DIR}"
 mkdir -p /build "${OUT_DIR}"
 
-# 1. Setup ArchISO Profile
+# 1. Setup ArchISO Profile & Enable [multilib] for Windows App Support
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
+
+cat <<'MULTILIB_EOF' >> "${PROFILE_DIR}/pacman.conf"
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+MULTILIB_EOF
 
 # 2. ISO Metadata & Explicit Executable Permissions
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
@@ -26,7 +32,7 @@ sed -i 's/^iso_application=.*/iso_application="OneOS Live\/Install Media"/' "${P
 
 sed -i '/^file_permissions=(/a \  ["/usr/local/bin/oneos-installer"]="0:0:755"\n  ["/usr/local/bin/oneos-gemini-assistant.py"]="0:0:755"\n  ["/usr/local/bin/oneos-boot-splash"]="0:0:755"\n  ["/usr/local/bin/oneos-ota-updater"]="0:0:755"\n  ["/usr/local/bin/oneos-trust-desktop"]="0:0:755"' "${PROFILE_DIR}/profiledef.sh"
 
-# 3. Packages
+# 3. Packages (Plasma 6, Core Utilities, Plymouth, Firmware & Wine Support)
 cat <<'PKGS_EOF' >> "${PROFILE_DIR}/packages.x86_64"
 xorg-server
 xorg-xinit
@@ -57,6 +63,11 @@ noto-fonts-emoji
 plymouth
 linux-firmware
 intel-ucode
+amd-ucode
+open-vm-tools
+mesa
+vulkan-intel
+vulkan-radeon
 networkmanager
 zram-generator
 pipewire
@@ -80,6 +91,13 @@ python-pillow
 xclip
 fastfetch
 vlc
+wine-staging
+wine-mono
+wine-gecko
+winetricks
+lib32-mesa
+lib32-vulkan-icd-loader
+lib32-pipewire
 PKGS_EOF
 
 AIROOTFS="${PROFILE_DIR}/airootfs"
@@ -88,6 +106,8 @@ mkdir -p \
   "${AIROOTFS}/etc/xdg/autostart" \
   "${AIROOTFS}/etc/sudoers.d" \
   "${AIROOTFS}/etc/plymouth" \
+  "${AIROOTFS}/etc/systemd/sleep.conf.d" \
+  "${AIROOTFS}/etc/skel/.config" \
   "${AIROOTFS}/etc/skel/Desktop" \
   "${AIROOTFS}/usr/local/bin" \
   "${AIROOTFS}/usr/share/applications"
@@ -103,8 +123,16 @@ cp -f "${REPO_DIR}/configs/kdeglobals" "${AIROOTFS}/etc/xdg/kdeglobals"
 cp -f "${REPO_DIR}/scripts/customize-rootfs.sh" "${AIROOTFS}/root/customize_airootfs.sh"
 chmod 0755 "${AIROOTFS}/root/customize_airootfs.sh"
 
-# 5. Early KMS for VMware/GPU + Plymouth Boot Splash
-sed -i 's/^MODULES=.*/MODULES=(vmwgfx i915 amdgpu)/' "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
+cat <<'TARGET_MULTILIB' >> "${AIROOTFS}/etc/pacman.conf"
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+TARGET_MULTILIB
+
+# 5. Universal Storage, GPU, Network & Input Drivers + Plymouth Boot Splash
+ALL_MODULES="ahci sd_mod sr_mod nvme nvme_core vmw_pvscsi mptspi mpt3sas virtio_blk virtio_scsi virtio_pci hv_storvsc uas usb_storage vmwgfx i915 xe amdgpu radeon nouveau virtio_gpu bochs qxl e1000 e1000e vmxnet3 r8169 igc iwlwifi virtio_net usbhid hid_generic xhci_pci ehci_pci"
+
+sed -i "s/^MODULES=.*/MODULES=(${ALL_MODULES})/" "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
 sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf.d/archiso.conf" 2>/dev/null || \
   sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
 
@@ -123,7 +151,7 @@ for entry in "${PROFILE_DIR}/efiboot/loader/entries/"*.conf "${PROFILE_DIR}/sysl
   fi
 done
 
-# 6. OS Identity, Zero-Password Sudo & Trusted Autostart Entries
+# 6. OS Identity, Zero-Password Sudo, No-Sleep Profile & Trusted Autostart Entries
 cat <<'OS_REL_EOF' > "${AIROOTFS}/etc/os-release"
 NAME="OneOS"
 PRETTY_NAME="OneOS"
@@ -150,6 +178,30 @@ Defaults env_keep += "DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SE
 %wheel ALL=(ALL:ALL) NOPASSWD: ALL
 SUDO_EOF
 chmod 0440 "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
+
+# Never Sleep / Never Lock Profile
+cat <<'SLEEP_CONF' > "${AIROOTFS}/etc/systemd/sleep.conf.d/10-nosleep.conf"
+[Sleep]
+AllowSuspend=no
+AllowHibernation=no
+AllowSuspendThenHibernate=no
+AllowHybridSleep=no
+SLEEP_CONF
+
+cat <<'POWER_RC' > "${AIROOTFS}/etc/skel/.config/powerdevilrc"
+[AC][Display]
+DimDisplayWhenIdle=false
+TurnOffDisplayWhenIdle=false
+
+[AC][SuspendAndShutdown]
+AutoSuspendAction=0
+POWER_RC
+
+cat <<'LOCK_RC' > "${AIROOTFS}/etc/skel/.config/kscreenlockerrc"
+[Daemon]
+Autolock=false
+LockOnResume=false
+LOCK_RC
 
 # Helper script that marks Desktop icons trusted in KDE Plasma 6
 cat <<'TRUST_SH' > "${AIROOTFS}/usr/local/bin/oneos-trust-desktop"
