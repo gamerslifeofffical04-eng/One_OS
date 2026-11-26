@@ -17,7 +17,7 @@ mkdir -p /build "${OUT_DIR}"
 # 1. Setup ArchISO Profile
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
 
-# 2. ISO Metadata & Explicit Executable Permissions (Prevents mkarchiso stripping +x)
+# 2. ISO Metadata & Explicit Executable Permissions
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i "s/^iso_version=.*/iso_version=\"v${ONEOS_VERSION}\"/" "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
@@ -100,17 +100,28 @@ cp -f "${REPO_DIR}/apps/oneos-ota-updater.py" "${AIROOTFS}/usr/local/bin/oneos-o
 chmod 0755 "${AIROOTFS}/usr/local/bin/"oneos-*
 
 cp -f "${REPO_DIR}/configs/kdeglobals" "${AIROOTFS}/etc/xdg/kdeglobals"
-cp -f "${REPO_DIR}/configs/plymouthd.conf" "${AIROOTFS}/etc/plymouth/plymouthd.conf"
 cp -f "${REPO_DIR}/scripts/customize-rootfs.sh" "${AIROOTFS}/root/customize_airootfs.sh"
 chmod 0755 "${AIROOTFS}/root/customize_airootfs.sh"
 
-# 5. Keep ArchISO Live Boot Hooks Intact & Add Plymouth
+# 5. Early KMS for VMware/GPU + Plymouth Boot Splash
+sed -i 's/^MODULES=.*/MODULES=(vmwgfx i915 amdgpu)/' "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
 sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf.d/archiso.conf" 2>/dev/null || \
   sed -i 's/\budev\b/udev plymouth/' "${AIROOTFS}/etc/mkinitcpio.conf" 2>/dev/null || true
 
-sed -i 's/quiet/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0/g' \
-  "${PROFILE_DIR}/efiboot/loader/entries/"*.conf \
-  "${PROFILE_DIR}/syslinux/"*.cfg 2>/dev/null || true
+cat <<'PLY_CONF' > "${AIROOTFS}/etc/plymouth/plymouthd.conf"
+[Daemon]
+Theme=spinner
+ShowDelay=0
+DeviceTimeout=5
+PLY_CONF
+
+for entry in "${PROFILE_DIR}/efiboot/loader/entries/"*.conf "${PROFILE_DIR}/syslinux/"*.cfg; do
+  if [ -f "$entry" ]; then
+    sed -i 's/\bquiet\b/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0/g' "$entry"
+    grep -q "splash" "$entry" || sed -i '/^options / s/$/ quiet splash loglevel=3 vt.global_cursor_default=0/' "$entry"
+    grep -q "splash" "$entry" || sed -i '/^\s*APPEND / s/$/ quiet splash loglevel=3 vt.global_cursor_default=0/' "$entry"
+  fi
+done
 
 # 6. OS Identity, Zero-Password Sudo & Trusted Autostart Entries
 cat <<'OS_REL_EOF' > "${AIROOTFS}/etc/os-release"
@@ -140,7 +151,7 @@ Defaults env_keep += "DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SE
 SUDO_EOF
 chmod 0440 "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
 
-# Helper script that marks Desktop icons trusted in KDE Plasma 6 (eliminates "Do you trust this application?")
+# Helper script that marks Desktop icons trusted in KDE Plasma 6
 cat <<'TRUST_SH' > "${AIROOTFS}/usr/local/bin/oneos-trust-desktop"
 #!/usr/bin/env bash
 sleep 2
@@ -165,6 +176,18 @@ chmod 0755 "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
 
 cp -f "${AIROOTFS}/usr/share/applications/oneos-installer.desktop" "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
 chmod 0755 "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
+
+# OneOS PyQt6 Boot/Welcome Splash
+cat <<'SPLASH_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-boot-splash.desktop"
+[Desktop Entry]
+Type=Application
+Name=OneOS Boot Splash
+Exec=/usr/local/bin/oneos-boot-splash
+Icon=start-here-kde
+Terminal=false
+NoDisplay=true
+X-KDE-autostart-phase=Initialization
+SPLASH_DESK
 
 # Auto-trust desktop shortcut + open OneOS Setup automatically on live boot
 cat <<'INSTALL_AUTO' > "${AIROOTFS}/etc/xdg/autostart/oneos-installer.desktop"
