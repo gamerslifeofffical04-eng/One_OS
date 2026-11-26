@@ -14,7 +14,7 @@ pacman -Syu --noconfirm archiso git
 rm -rf /build "${OUT_DIR}"
 mkdir -p /build "${OUT_DIR}"
 
-# 1. Setup ArchISO Profile (No AUR / Calamares compilation needed)
+# 1. Setup ArchISO Profile
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
 
 # 2. ISO Metadata
@@ -24,7 +24,7 @@ sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_publisher=.*/iso_publisher="OneOS Project"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_application=.*/iso_application="OneOS Live\/Install Media"/' "${PROFILE_DIR}/profiledef.sh"
 
-# 3. Packages (Plasma 6, Plymouth, PyQt6 WebEngine, Parted & Arch Install Scripts)
+# 3. Packages
 cat <<'PKGS_EOF' >> "${PROFILE_DIR}/packages.x86_64"
 xorg-server
 xorg-xinit
@@ -85,6 +85,7 @@ mkdir -p \
   "${AIROOTFS}/etc/xdg/autostart" \
   "${AIROOTFS}/etc/sudoers.d" \
   "${AIROOTFS}/etc/plymouth" \
+  "${AIROOTFS}/etc/skel/Desktop" \
   "${AIROOTFS}/usr/local/bin" \
   "${AIROOTFS}/usr/share/applications"
 
@@ -130,7 +131,10 @@ Relogin=false
 Current=breeze
 SDDM_EOF
 
-echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" > "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
+cat <<'SUDO_EOF' > "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
+Defaults env_keep += "DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS"
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+SUDO_EOF
 chmod 0440 "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
 
 cat <<'INSTALL_DESK' > "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
@@ -143,9 +147,22 @@ Icon=system-software-install
 Terminal=false
 Categories=System;
 INSTALL_DESK
+chmod 0755 "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
 
-# Auto-open Install OneOS on live boot (excluded from installed disk during rsync)
-cp -f "${AIROOTFS}/usr/share/applications/oneos-installer.desktop" "${AIROOTFS}/etc/xdg/autostart/oneos-installer.desktop"
+# Desktop shortcut for live user
+cp -f "${AIROOTFS}/usr/share/applications/oneos-installer.desktop" "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
+chmod 0755 "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
+
+# Delayed autostart entry so Plasma 6 finishes initializing first
+cat <<'INSTALL_AUTO' > "${AIROOTFS}/etc/xdg/autostart/oneos-installer.desktop"
+[Desktop Entry]
+Type=Application
+Name=Install OneOS
+Exec=/bin/bash -c 'sleep 4 && /usr/local/bin/oneos-installer'
+Icon=system-software-install
+Terminal=false
+X-KDE-autostart-phase=Application
+INSTALL_AUTO
 
 cat <<'PILL_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-gemini-pill.desktop"
 [Desktop Entry]
