@@ -107,7 +107,7 @@ class InstallWorker(QThread):
                 "/mnt/",
             ])
 
-            self.progress.emit(65, "Generating kernel & initramfs...")
+            self.progress.emit(65, "Generating kernel, Plymouth & initramfs...")
             kernels = glob.glob(
                 "/run/archiso/bootmnt/*/boot/x86_64/vmlinuz-linux"
             ) + glob.glob("/boot/vmlinuz-linux")
@@ -122,6 +122,15 @@ class InstallWorker(QThread):
             with open("/mnt/etc/hostname", "w") as f:
                 f.write(f"{self.hostname}\n")
 
+            self.run_cmd(
+                [
+                    "sed",
+                    "-i",
+                    "s/^MODULES=.*/MODULES=(vmwgfx i915 amdgpu)/",
+                    "/etc/mkinitcpio.conf",
+                ],
+                chroot=True,
+            )
             self.run_cmd(
                 [
                     "sed",
@@ -166,170 +175,4 @@ class InstallWorker(QThread):
                 "OneOS is installed! Click OK, shut down the VM, disconnect the ISO, and boot from your hard drive.",
             )
         except Exception as e:
-            subprocess.run(["umount", "-R", "/mnt"], stderr=subprocess.DEVNULL)
-            self.finished.emit(False, str(e))
-
-
-class OneOSInstaller(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("OneOS Setup")
-        self.setFixedSize(540, 430)
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #0d1017;
-                color: #f3f4f6;
-                font-family: 'Inter', 'Noto Sans', sans-serif;
-                font-size: 13px;
-            }
-            QFrame#Card {
-                background-color: #151a24;
-                border: 1px solid #232a3b;
-                border-radius: 14px;
-            }
-            QLabel#Badge {
-                background-color: rgba(59, 130, 246, 0.16);
-                color: #60a5fa;
-                border: 1px solid rgba(59, 130, 246, 0.35);
-                border-radius: 10px;
-                padding: 3px 10px;
-                font-size: 11px;
-                font-weight: 600;
-            }
-            QLabel#Title {
-                font-size: 22px;
-                font-weight: 700;
-                color: #ffffff;
-            }
-            QLabel#Subtitle {
-                color: #9ca3af;
-                font-size: 13px;
-            }
-            QLabel#FieldLabel {
-                color: #cbd5e1;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QComboBox, QLineEdit {
-                background-color: #0f131b;
-                border: 1px solid #2b3448;
-                border-radius: 8px;
-                padding: 9px 12px;
-                color: #ffffff;
-                font-size: 13px;
-            }
-            QComboBox:focus, QLineEdit:focus {
-                border: 1px solid #3b82f6;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 28px;
-            }
-            QPushButton#InstallBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #4f46e5);
-                color: #ffffff;
-                border: none;
-                border-radius: 10px;
-                padding: 12px;
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QPushButton#InstallBtn:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1);
-            }
-            QPushButton#InstallBtn:disabled {
-                background: #1f2633;
-                color: #6b7280;
-            }
-            QProgressBar {
-                background-color: #0f131b;
-                border: 1px solid #232a3b;
-                border-radius: 7px;
-                text-align: center;
-                color: #e5e7eb;
-                font-weight: 600;
-                height: 16px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #8b5cf6);
-                border-radius: 6px;
-            }
-        """)
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 22)
-        root.setSpacing(16)
-
-        # Header
-        header_top = QHBoxLayout()
-        badge = QLabel("ONEOS LIVE INSTALLER")
-        badge.setObjectName("Badge")
-        header_top.addWidget(badge)
-        header_top.addStretch()
-        mode_lbl = QLabel("UEFI" if os.path.isdir("/sys/firmware/efi") else "Legacy BIOS")
-        mode_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 600;")
-        header_top.addWidget(mode_lbl)
-        root.addLayout(header_top)
-
-        title = QLabel("Install OneOS to Your Drive")
-        title.setObjectName("Title")
-        root.addWidget(title)
-
-        sub = QLabel("Fast, clean installation with Gemini AI assistant and Plasma 6 preconfigured.")
-        sub.setObjectName("Subtitle")
-        root.addWidget(sub)
-
-        # Card
-        card = QFrame()
-        card.setObjectName("Card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(18, 18, 18, 18)
-        card_layout.setSpacing(12)
-
-        lbl_disk = QLabel("TARGET STORAGE DRIVE")
-        lbl_disk.setObjectName("FieldLabel")
-        card_layout.addWidget(lbl_disk)
-
-        self.disk_box = QComboBox()
-        for dev, label in get_disks():
-            self.disk_box.addItem(label, dev)
-        card_layout.addWidget(self.disk_box)
-
-        row = QHBoxLayout()
-        row.setSpacing(12)
-
-        col1 = QVBoxLayout()
-        lbl_user = QLabel("ACCOUNT (AUTO-LOGIN)")
-        lbl_user.setObjectName("FieldLabel")
-        self.user_edit = QLineEdit("oneos")
-        self.user_edit.setReadOnly(True)
-        col1.addWidget(lbl_user)
-        col1.addWidget(self.user_edit)
-
-        col2 = QVBoxLayout()
-        lbl_host = QLabel("DEVICE NAME")
-        lbl_host.setObjectName("FieldLabel")
-        self.host_edit = QLineEdit("oneos-pc")
-        col2.addWidget(lbl_host)
-        col2.addWidget(self.host_edit)
-
-        row.addLayout(col1)
-        row.addLayout(col2)
-        card_layout.addLayout(row)
-
-        root.addWidget(card)
-
-        # Progress & Status
-        self.status_label = QLabel("Ready to install. Selected drive will be formatted.")
-        self.status_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        root.addWidget(self.status_label)
-
-        self.bar = QProgressBar()
-        self.bar.setValue(0)
-        self.bar.setTextVisible(False)
-        root.addWidget(self.bar)
-
-        self.install_btn = QPushButton("Erase Drive && Install OneOS")
-        self.install_btn.setObjectName("InstallBtn")
-        self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.install_btn.clicked.connect(self.start_
+            subprocess.run(["umount", "-R", "/mnt"], stderr=subprocess.DEV
