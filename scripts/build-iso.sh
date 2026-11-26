@@ -17,12 +17,14 @@ mkdir -p /build "${OUT_DIR}"
 # 1. Setup ArchISO Profile
 cp -r /usr/share/archiso/configs/releng "${PROFILE_DIR}"
 
-# 2. ISO Metadata
+# 2. ISO Metadata & Explicit Executable Permissions (Prevents mkarchiso stripping +x)
 sed -i 's/^iso_name=.*/iso_name="OneOS"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i "s/^iso_version=.*/iso_version=\"v${ONEOS_VERSION}\"/" "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_label=.*/iso_label="ONEOS_LIVE"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_publisher=.*/iso_publisher="OneOS Project"/' "${PROFILE_DIR}/profiledef.sh"
 sed -i 's/^iso_application=.*/iso_application="OneOS Live\/Install Media"/' "${PROFILE_DIR}/profiledef.sh"
+
+sed -i '/^file_permissions=(/a \  ["/usr/local/bin/oneos-installer"]="0:0:755"\n  ["/usr/local/bin/oneos-gemini-assistant.py"]="0:0:755"\n  ["/usr/local/bin/oneos-boot-splash"]="0:0:755"\n  ["/usr/local/bin/oneos-ota-updater"]="0:0:755"\n  ["/usr/local/bin/oneos-trust-desktop"]="0:0:755"' "${PROFILE_DIR}/profiledef.sh"
 
 # 3. Packages
 cat <<'PKGS_EOF' >> "${PROFILE_DIR}/packages.x86_64"
@@ -69,6 +71,7 @@ efibootmgr
 os-prober
 dosfstools
 mtools
+glib2
 python
 python-pyqt6
 python-pyqt6-webengine
@@ -109,7 +112,7 @@ sed -i 's/quiet/quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_def
   "${PROFILE_DIR}/efiboot/loader/entries/"*.conf \
   "${PROFILE_DIR}/syslinux/"*.cfg 2>/dev/null || true
 
-# 6. OS Identity, Zero-Password Sudo & Autostart Entries
+# 6. OS Identity, Zero-Password Sudo & Trusted Autostart Entries
 cat <<'OS_REL_EOF' > "${AIROOTFS}/etc/os-release"
 NAME="OneOS"
 PRETTY_NAME="OneOS"
@@ -137,6 +140,17 @@ Defaults env_keep += "DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SE
 SUDO_EOF
 chmod 0440 "${AIROOTFS}/etc/sudoers.d/oneos-nopasswd"
 
+# Helper script that marks Desktop icons trusted in KDE Plasma 6 (eliminates "Do you trust this application?")
+cat <<'TRUST_SH' > "${AIROOTFS}/usr/local/bin/oneos-trust-desktop"
+#!/usr/bin/env bash
+sleep 2
+if [ -f "$HOME/Desktop/oneos-installer.desktop" ]; then
+  chmod +x "$HOME/Desktop/oneos-installer.desktop"
+  gio set "$HOME/Desktop/oneos-installer.desktop" metadata::trusted true 2>/dev/null || true
+fi
+TRUST_SH
+chmod 0755 "${AIROOTFS}/usr/local/bin/oneos-trust-desktop"
+
 cat <<'INSTALL_DESK' > "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
 [Desktop Entry]
 Type=Application
@@ -149,21 +163,21 @@ Categories=System;
 INSTALL_DESK
 chmod 0755 "${AIROOTFS}/usr/share/applications/oneos-installer.desktop"
 
-# Desktop shortcut for live user
 cp -f "${AIROOTFS}/usr/share/applications/oneos-installer.desktop" "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
 chmod 0755 "${AIROOTFS}/etc/skel/Desktop/oneos-installer.desktop"
 
-# Delayed autostart entry so Plasma 6 finishes initializing first
+# Auto-trust desktop shortcut + open OneOS Setup automatically on live boot
 cat <<'INSTALL_AUTO' > "${AIROOTFS}/etc/xdg/autostart/oneos-installer.desktop"
 [Desktop Entry]
 Type=Application
 Name=Install OneOS
-Exec=/bin/bash -c 'sleep 4 && /usr/local/bin/oneos-installer'
+Exec=/bin/bash -c '/usr/local/bin/oneos-trust-desktop && sleep 1 && /usr/local/bin/oneos-installer'
 Icon=system-software-install
 Terminal=false
 X-KDE-autostart-phase=Application
 INSTALL_AUTO
 
+# Auto-launch Gemini Corner Pill on both Live and Installed systems
 cat <<'PILL_DESK' > "${AIROOTFS}/etc/xdg/autostart/oneos-gemini-pill.desktop"
 [Desktop Entry]
 Type=Application
@@ -171,7 +185,7 @@ Name=OneOS Gemini Corner Pill
 Exec=/bin/bash -c 'sleep 3 && /usr/local/bin/oneos-gemini-assistant.py'
 Terminal=false
 NoDisplay=true
-X-KDE-autostart-after=panel
+X-KDE-autostart-phase=Application
 PILL_DESK
 
 # 7. Build ISO & Fix Host Output Permissions
