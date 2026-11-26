@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import glob
 import os
 import subprocess
 import sys
@@ -69,16 +70,21 @@ class InstallWorker(QThread):
 
             self.progress.emit(30, "Copying OneOS system files to disk...")
             self.run_cmd([
-                "rsync", "-aHAX", "--info=progress2",
+                "rsync", "-aHAX",
                 "--exclude=/dev/*", "--exclude=/proc/*", "--exclude=/sys/*",
                 "--exclude=/tmp/*", "--exclude=/run/*", "--exclude=/mnt/*",
                 "--exclude=/media/*", "--exclude=/lost+found",
                 "--exclude=/etc/xdg/autostart/oneos-installer.desktop",
+                "--exclude=/home/*/Desktop/oneos-installer.desktop",
                 "/", "/mnt/"
             ])
 
             self.progress.emit(65, "Configuring kernel, initramfs, and fstab...")
-            self.run_cmd(["cp", "-f", "/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux", "/mnt/boot/vmlinuz-linux"])
+            kernels = glob.glob("/run/archiso/bootmnt/*/boot/x86_64/vmlinuz-linux") + glob.glob("/boot/vmlinuz-linux")
+            if not kernels:
+                raise RuntimeError("Could not locate vmlinuz-linux on live media.")
+            self.run_cmd(["cp", "-f", kernels[0], "/mnt/boot/vmlinuz-linux"])
+
             with open("/mnt/etc/fstab", "w") as f:
                 fstab_out = subprocess.check_output(["genfstab", "-U", "/mnt"], text=True)
                 f.write(fstab_out)
@@ -196,7 +202,11 @@ class OneOSInstaller(QWidget):
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
-        os.execvp("sudo", ["sudo", "-E", sys.executable] + sys.argv)
+        env_args = [
+            f"{k}={v}" for k, v in os.environ.items()
+            if k in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR")
+        ]
+        os.execvp("sudo", ["sudo", "-n"] + env_args + [sys.executable] + sys.argv)
     app = QApplication(sys.argv)
     win = OneOSInstaller()
     win.show()
