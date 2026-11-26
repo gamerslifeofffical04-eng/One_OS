@@ -9,6 +9,15 @@ from PyQt6.QtWidgets import (
     QMessageBox, QProgressBar, QPushButton, QVBoxLayout, QWidget
 )
 
+UNIVERSAL_MODULES = (
+    "ahci sd_mod sr_mod nvme nvme_core "
+    "vmw_pvscsi mptspi mpt3sas virtio_blk virtio_scsi virtio_pci hv_storvsc "
+    "uas usb_storage "
+    "vmwgfx i915 xe amdgpu radeon nouveau virtio_gpu bochs qxl "
+    "e1000 e1000e vmxnet3 r8169 igc iwlwifi virtio_net "
+    "usbhid hid_generic xhci_pci ehci_pci"
+)
+
 
 def get_disks():
     out = subprocess.check_output(
@@ -90,24 +99,55 @@ class InstallWorker(QThread):
                 self.run_cmd(["mount", root_part, "/mnt"])
 
             self.progress.emit(30, "Copying OneOS system files to drive...")
-            self.run_cmd([
-                "rsync",
-                "-aHAX",
-                "--exclude=/dev/*",
-                "--exclude=/proc/*",
-                "--exclude=/sys/*",
-                "--exclude=/tmp/*",
-                "--exclude=/run/*",
-                "--exclude=/mnt/*",
-                "--exclude=/media/*",
-                "--exclude=/lost+found",
-                "--exclude=/etc/xdg/autostart/oneos-installer.desktop",
-                "--exclude=/home/*/Desktop/oneos-installer.desktop",
-                "/",
-                "/mnt/",
-            ])
+            proc = subprocess.Popen(
+                [
+                    "nice",
+                    "-n",
+                    "15",
+                    "ionice",
+                    "-c",
+                    "2",
+                    "-n",
+                    "7",
+                    "rsync",
+                    "-a",
+                    "--info=progress2",
+                    "--exclude=/dev/*",
+                    "--exclude=/proc/*",
+                    "--exclude=/sys/*",
+                    "--exclude=/tmp/*",
+                    "--exclude=/run/*",
+                    "--exclude=/mnt/*",
+                    "--exclude=/media/*",
+                    "--exclude=/lost+found",
+                    "--exclude=/var/cache/pacman/pkg/*",
+                    "--exclude=/etc/xdg/autostart/oneos-installer.desktop",
+                    "--exclude=/home/*/Desktop/oneos-installer.desktop",
+                    "/",
+                    "/mnt/",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                if "%" in line:
+                    for token in line.split():
+                        if token.endswith("%"):
+                            try:
+                                pct = int(token.rstrip("%"))
+                                scaled = 30 + int(pct * 0.34)
+                                self.progress.emit(
+                                    scaled, f"Copying OneOS system files ({pct}%)..."
+                                )
+                            except ValueError:
+                                pass
+            proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError("rsync failed while copying system files to /mnt.")
 
-            self.progress.emit(65, "Generating kernel, Plymouth & initramfs...")
+            self.progress.emit(65, "Building kernel, universal storage & GPU drivers...")
             kernels = glob.glob(
                 "/run/archiso/bootmnt/*/boot/x86_64/vmlinuz-linux"
             ) + glob.glob("/boot/vmlinuz-linux")
@@ -122,11 +162,22 @@ class InstallWorker(QThread):
             with open("/mnt/etc/hostname", "w") as f:
                 f.write(f"{self.hostname}\n")
 
+            os.makedirs("/mnt/etc/mkinitcpio.d", exist_ok=True)
+            with open("/mnt/etc/mkinitcpio.d/linux.preset", "w") as f:
+                f.write(
+                    "ALL_config=\"/etc/mkinitcpio.conf\"\n"
+                    "ALL_kver=\"/boot/vmlinuz-linux\"\n"
+                    "PRESETS=('default' 'fallback')\n"
+                    "default_image=\"/boot/initramfs-linux.img\"\n"
+                    "fallback_image=\"/boot/initramfs-linux-fallback.img\"\n"
+                    "fallback_options=\"-S autodetect\"\n"
+                )
+
             self.run_cmd(
                 [
                     "sed",
                     "-i",
-                    "s/^MODULES=.*/MODULES=(vmwgfx i915 amdgpu)/",
+                    f"s/^MODULES=.*/MODULES=({UNIVERSAL_MODULES})/",
                     "/etc/mkinitcpio.conf",
                 ],
                 chroot=True,
@@ -140,9 +191,23 @@ class InstallWorker(QThread):
                 ],
                 chroot=True,
             )
-            self.run_cmd(["mkinitcpio", "-P"], chroot=True)
+            self.run_cmd(["mkinitcpio", "-p", "linux"], chroot=True)
 
             self.progress.emit(85, "Installing GRUB bootloader...")
+            root_uuid = subprocess.check_output(
+                ["blkid", "-s", "UUID", "-o", "value", root_part], text=True
+            ).strip()
+
+            self.run_cmd(
+                [
+                    "sed",
+                    "-i",
+                    f's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="root=UUID={root_uuid} rw quiet splash"|',
+                    "/etc/default/grub",
+                ],
+                chroot=True,
+            )
+
             if is_uefi:
                 self.run_cmd(
                     [
@@ -162,7 +227,11 @@ class InstallWorker(QThread):
 
             self.run_cmd(["grub-mkconfig", "-o", "/boot/grub/grub.cfg"], chroot=True)
 
-            self.progress.emit(95, "Finalizing user profile...")
+            self.progress.emit(95, "Enabling VMware tools & finalizing user profile...")
+            subprocess.run(
+                ["arch-chroot", "/mnt", "systemctl", "enable", "vmtoolsd.service"],
+                stderr=subprocess.DEVNULL,
+            )
             subprocess.run(
                 ["arch-chroot", "/mnt", "passwd", "-d", self.username],
                 stderr=subprocess.DEVNULL,
@@ -175,4 +244,226 @@ class InstallWorker(QThread):
                 "OneOS is installed! Click OK, shut down the VM, disconnect the ISO, and boot from your hard drive.",
             )
         except Exception as e:
-            subprocess.run(["umount", "-R", "/mnt"], stderr=subprocess.DEV
+            subprocess.run(["umount", "-R", "/mnt"], stderr=subprocess.DEVNULL)
+            self.finished.emit(False, str(e))
+
+
+class OneOSInstaller(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("OneOS Setup")
+        self.setFixedSize(540, 430)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #0d1017;
+                color: #f3f4f6;
+                font-family: 'Inter', 'Noto Sans', sans-serif;
+                font-size: 13px;
+            }
+            QFrame#Card {
+                background-color: #151a24;
+                border: 1px solid #232a3b;
+                border-radius: 14px;
+            }
+            QLabel#Badge {
+                background-color: rgba(59, 130, 246, 0.16);
+                color: #60a5fa;
+                border: 1px solid rgba(59, 130, 246, 0.35);
+                border-radius: 10px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QLabel#Title {
+                font-size: 22px;
+                font-weight: 700;
+                color: #ffffff;
+            }
+            QLabel#Subtitle {
+                color: #9ca3af;
+                font-size: 13px;
+            }
+            QLabel#FieldLabel {
+                color: #cbd5e1;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QComboBox, QLineEdit {
+                background-color: #0f131b;
+                border: 1px solid #2b3448;
+                border-radius: 8px;
+                padding: 9px 12px;
+                color: #ffffff;
+                font-size: 13px;
+            }
+            QComboBox:focus, QLineEdit:focus {
+                border: 1px solid #3b82f6;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 28px;
+            }
+            QPushButton#InstallBtn {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #4f46e5);
+                color: #ffffff;
+                border: none;
+                border-radius: 10px;
+                padding: 12px;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QPushButton#InstallBtn:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1);
+            }
+            QPushButton#InstallBtn:disabled {
+                background: #1f2633;
+                color: #6b7280;
+            }
+            QProgressBar {
+                background-color: #0f131b;
+                border: 1px solid #232a3b;
+                border-radius: 7px;
+                text-align: center;
+                color: #e5e7eb;
+                font-weight: 600;
+                height: 16px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #8b5cf6);
+                border-radius: 6px;
+            }
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(16)
+
+        header_top = QHBoxLayout()
+        badge = QLabel("ONEOS LIVE INSTALLER")
+        badge.setObjectName("Badge")
+        header_top.addWidget(badge)
+        header_top.addStretch()
+        mode_lbl = QLabel("UEFI" if os.path.isdir("/sys/firmware/efi") else "Legacy BIOS")
+        mode_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 600;")
+        header_top.addWidget(mode_lbl)
+        root.addLayout(header_top)
+
+        title = QLabel("Install OneOS to Your Drive")
+        title.setObjectName("Title")
+        root.addWidget(title)
+
+        sub = QLabel("Plasma 6, Gemini AI assistant, and Windows .exe support preconfigured.")
+        sub.setObjectName("Subtitle")
+        root.addWidget(sub)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 18, 18, 18)
+        card_layout.setSpacing(12)
+
+        lbl_disk = QLabel("TARGET STORAGE DRIVE")
+        lbl_disk.setObjectName("FieldLabel")
+        card_layout.addWidget(lbl_disk)
+
+        self.disk_box = QComboBox()
+        for dev, label in get_disks():
+            self.disk_box.addItem(label, dev)
+        card_layout.addWidget(self.disk_box)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        col1 = QVBoxLayout()
+        lbl_user = QLabel("ACCOUNT (AUTO-LOGIN)")
+        lbl_user.setObjectName("FieldLabel")
+        self.user_edit = QLineEdit("oneos")
+        self.user_edit.setReadOnly(True)
+        col1.addWidget(lbl_user)
+        col1.addWidget(self.user_edit)
+
+        col2 = QVBoxLayout()
+        lbl_host = QLabel("DEVICE NAME")
+        lbl_host.setObjectName("FieldLabel")
+        self.host_edit = QLineEdit("oneos-pc")
+        col2.addWidget(lbl_host)
+        col2.addWidget(self.host_edit)
+
+        row.addLayout(col1)
+        row.addLayout(col2)
+        card_layout.addLayout(row)
+
+        root.addWidget(card)
+
+        self.status_label = QLabel("Ready to install. Selected drive will be formatted.")
+        self.status_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        root.addWidget(self.status_label)
+
+        self.bar = QProgressBar()
+        self.bar.setValue(0)
+        self.bar.setTextVisible(False)
+        root.addWidget(self.bar)
+
+        self.install_btn = QPushButton("Erase Drive && Install OneOS")
+        self.install_btn.setObjectName("InstallBtn")
+        self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_btn.clicked.connect(self.start_install)
+        root.addWidget(self.install_btn)
+
+    def start_install(self):
+        disk = self.disk_box.currentData()
+        if not disk:
+            QMessageBox.critical(self, "No Drive Found", "No target storage drive was detected.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Confirm Installation",
+            f"All existing data on {disk} will be erased and replaced with OneOS.\n\nProceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.install_btn.setEnabled(False)
+        self.disk_box.setEnabled(False)
+        self.host_edit.setEnabled(False)
+        self.worker = InstallWorker(
+            disk, self.user_edit.text(), self.host_edit.text().strip() or "oneos-pc"
+        )
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_finished)
+        self.worker.start()
+
+    def on_progress(self, val, msg):
+        self.bar.setValue(val)
+        self.status_label.setText(msg)
+
+    def on_finished(self, ok, msg):
+        self.install_btn.setEnabled(True)
+        self.disk_box.setEnabled(True)
+        self.host_edit.setEnabled(True)
+        if ok:
+            QMessageBox.information(self, "OneOS Installed", msg)
+        else:
+            QMessageBox.critical(self, "Installation Error", msg)
+
+
+if __name__ == "__main__":
+    if os.geteuid() != 0:
+        env_args = [
+            f"{k}={v}"
+            for k, v in os.environ.items()
+            if k
+            in (
+                "DISPLAY",
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
+                "DBUS_SESSION_BUS_ADDRESS",
+                "XDG_RUNTIME_DIR",
+            )
+        ]
+        os.execvp("sudo", ["sudo", "-n"] + env_args + [sys.executable] + sys.argv)
+    app = QApplication(sys.argv)
+    win = OneOSInstaller()
+    win.show()
+    sys.exit(app.exec())
